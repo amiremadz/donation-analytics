@@ -9,102 +9,114 @@ cols = [0, 7, 10, 13, 14, 15]
 col_names = ['CMTE_ID', 'NAME', 'ZIP_CODE', 'TRANSACTION_DT', 'TRANSACTION_AMT', 'OTHER_ID']
 out_cols  = ['CMTE_ID', 'ZIP_CODE', 'TRANSACTION_YR', 'QUANTILE', 'SUM_SOFAR', 'COUNT_SOFAR']
 
-def validate_date(df):
-    length = df.shape[0]
-    valid = pd.Series(np.ones(length, dtype=bool), index=range(1, length + 1))
-    for idx, date in enumerate(df["TRANSACTION_DT"]):
-        try:
-            dtm.datetime.strptime(date, "%m%d%Y")
-        except ValueError:
-            valid.iloc[idx] = False
-    return df[valid]
+class RepeatDoner(object):
+    def __init__(self, input_fullpath, percentile_fullpath, output_fullpath):
+        self.input_fullpath = input_fullpath
+        self.percentile_fullpath = percentile_fullpath
+        self.output_fullpath = output_fullpath
+        self.df = pd.DataFrame()
+        self.percentile = 0
 
-def validate_zipcode(df):
-    length = df.shape[0]
-    valid = df["ZIP_CODE"].map(lambda s: len(s) >= 5)
-    return df[valid]
+    def run(self):
+        self.__find_precentile()
+        self.__preprocess()
+        self.__postprocess()
+        self.__save_result()
+        print(self.df)
 
-def validate_name(df):
-    length = df.shape[0]
-    valid = pd.Series(np.ones(length, dtype=bool), index=range(1, length + 1))
-    for idx, name in enumerate(df["NAME"]):
-        if len(name.split(',')) != 2:
-            valid.iloc[idx] = False	
-    return df[valid]
+    def __validate_date(self):
+        length = self.df.shape[0]
+        valid = pd.Series(np.ones(length, dtype=bool), index=range(1, length + 1))
+        for idx, date in enumerate(self.df["TRANSACTION_DT"]):
+            try:
+                dtm.datetime.strptime(date, "%m%d%Y")
+            except ValueError:
+                valid.iloc[idx] = False
+        self.df = self.df[valid]
 
-def find_precentile(percentile_fullpath):
-    with open(percentile_fullpath) as fh:
-        percentile = fh.read()
-    percentile = float(percentile.strip()) 
-    return percentile
+    def __validate_zipcode(self):
+        length = self.df.shape[0]
+        valid = self.df["ZIP_CODE"].map(lambda s: len(s) >= 5)
+        self.df = self.df[valid]
 
-def preprocess(input_fullpath):	
-    df = pd.read_csv(input_fullpath, header=None, delimiter='|')
-    df = df[cols]
-    df.columns = col_names
+    def __validate_name(self):
+        length = self.df.shape[0]
+        valid = pd.Series(np.ones(length, dtype=bool), index=range(1, length + 1))
+        for idx, name in enumerate(self.df["NAME"]):
+            if len(name.split(',')) != 2:
+                valid.iloc[idx] = False	
+        self.df = self.df[valid]
 
-    # Because we are only interested in individual contributions, 
-    # we only want records that have the field, OTHER_ID, set to empty 
-    df = df[df["OTHER_ID"].isnull()]
+    def __find_precentile(self):
+        with open(self.percentile_fullpath) as fh:
+            percentile = fh.read()
+        self.percentile = float(percentile.strip()) 
 
-    # If TRANSACTION_DT is an invalid date (e.g., empty, malformed)
-    df = df[~ df["TRANSACTION_DT"].isnull()]
-    df["TRANSACTION_DT"] = df["TRANSACTION_DT"].map(lambda td: str(td))
-    df = validate_date(df)
+    def __preprocess(self):	
+        self.df = pd.read_csv(self.input_fullpath, header=None, delimiter='|')
+        self.df = self.df[cols]
+        self.df.columns = col_names
 
-    # Output: 4-digit year of the contribution
-    df["TRANSACTION_YR"] = df["TRANSACTION_DT"].map(lambda td: td[-4:])
+        # Because we are only interested in individual contributions, 
+        # we only want records that have the field, OTHER_ID, set to empty 
+        self.df = self.df[self.df["OTHER_ID"].isnull()]
 
-    # If ZIP_CODE is an invalid zip code (i.e., empty, fewer than five digits)
-    df = df[~ df["ZIP_CODE"].isnull()]
-    df["ZIP_CODE"] = df["ZIP_CODE"].map(lambda z: str(z).zfill(9))
-    df = validate_zipcode(df)
+        # If TRANSACTION_DT is an invalid date (e.g., empty, malformed)
+        self.df = self.df[~ self.df["TRANSACTION_DT"].isnull()]
+        self.df["TRANSACTION_DT"] = self.df["TRANSACTION_DT"].map(lambda td: str(td))
+        self.__validate_date()
 
-    # While the data dictionary has the ZIP_CODE occupying nine characters, 
-    # for the purposes of the challenge, we only consider the first five characters 
-    # of the field as the zip code
-    df["ZIP_CODE"] = df["ZIP_CODE"].map(lambda z: z[0:5])
+        # Output: 4-digit year of the contribution
+        self.df["TRANSACTION_YR"] = self.df["TRANSACTION_DT"].map(lambda td: td[-4:])
 
-    # If the NAME is an invalid name (e.g., empty, malformed)
-    df = df[~ df["NAME"].isnull()]
-    df = validate_name(df)
+        # If ZIP_CODE is an invalid zip code (i.e., empty, fewer than five digits)
+        self.df = self.df[~ self.df["ZIP_CODE"].isnull()]
+        self.df["ZIP_CODE"] = self.df["ZIP_CODE"].map(lambda z: str(z).zfill(9))
+        self.__validate_zipcode()
 
-    # If any lines in the input file contains empty cells in the CMTE_ID 
-    # or TRANSACTION_AMT fields
-    df = df[~ df["CMTE_ID"].isnull()]
-    df = df[~ df["TRANSACTION_AMT"].isnull()]
-    df = df[df["TRANSACTION_AMT"] > 0]
+        # While the data dictionary has the ZIP_CODE occupying nine characters, 
+        # for the purposes of the challenge, we only consider the first five characters 
+        # of the field as the zip code
+        self.df["ZIP_CODE"] = self.df["ZIP_CODE"].map(lambda z: z[0:5])
 
-    # Drop redundant columns
-    df = df.drop(['TRANSACTION_DT', 'OTHER_ID'], axis=1)
-    return df
+        # If the NAME is an invalid name (e.g., empty, malformed)
+        self.df = self.df[~ self.df["NAME"].isnull()]
+        self.__validate_name()
 
-def postprocess(df):
-    df = df[df.duplicated(subset = {'NAME', 'ZIP_CODE'}, keep='first')]
-    df = df.reset_index(drop=True)
-		
-    df['SUM_SOFAR']   = df.groupby(['CMTE_ID', 'ZIP_CODE', 'TRANSACTION_YR'])['TRANSACTION_AMT'].cumsum()
-    df['COUNT_SOFAR'] = df.groupby(['CMTE_ID', 'ZIP_CODE', 'TRANSACTION_YR'])['TRANSACTION_AMT'].cumcount().apply(lambda x: x + 1)
-    df['QUANTILE'] = np.nan
+        # If any lines in the input file contains empty cells in the CMTE_ID 
+        # or TRANSACTION_AMT fields
+        self.df = self.df[~ self.df["CMTE_ID"].isnull()]
+        self.df = self.df[~ self.df["TRANSACTION_AMT"].isnull()]
+        self.df = self.df[self.df["TRANSACTION_AMT"] > 0]
 
-    for idx, _ in enumerate(df['TRANSACTION_AMT']):
-        idx_quantile = int(math.ceil((idx + 1) * (percentile / 100.0)) - 1)
-        df['QUANTILE'][idx] = round(df['TRANSACTION_AMT'][:idx+1].sort_values(inplace=False)[idx_quantile])
+        # Drop redundant columns
+        self.df = self.df.drop(['TRANSACTION_DT', 'OTHER_ID'], axis=1)
 
-    df['QUANTILE'] = df['QUANTILE'].astype('int')
+    def __postprocess(self):
+        self.df = self.df[self.df.duplicated(subset = {'NAME', 'ZIP_CODE'}, keep='first')]
+        self.df = self.df.reset_index(drop=True)
+                    
+        self.df['SUM_SOFAR']   = self.df.groupby(['CMTE_ID', 'ZIP_CODE', 'TRANSACTION_YR'])['TRANSACTION_AMT'].cumsum()
+        self.df['COUNT_SOFAR'] = self.df.groupby(['CMTE_ID', 'ZIP_CODE', 'TRANSACTION_YR'])['TRANSACTION_AMT'].cumcount().apply(lambda x: x + 1)
+        self.df['QUANTILE'] = np.nan
 
-    # Drop redundant columns and re-arrange to correct format
-    df = df.drop(['NAME', 'TRANSACTION_AMT'], axis=1)
-    df = df[out_cols]
-    return df
+        for idx, _ in enumerate(self.df['TRANSACTION_AMT']):
+            idx_quantile = int(math.ceil((idx + 1) * (self.percentile / 100.0)) - 1)
+            self.df['QUANTILE'][idx] = round(self.df['TRANSACTION_AMT'][:idx+1].sort_values(inplace=False)[idx_quantile])
+
+        self.df['QUANTILE'] = self.df['QUANTILE'].astype('int')
+
+        # Drop redundant columns and re-arrange to correct format
+        self.df = self.df.drop(['NAME', 'TRANSACTION_AMT'], axis=1)
+        self.df = self.df[out_cols]
+
+    def __save_result(self):
+        self.df.to_csv(self.output_fullpath, sep='|', header=False, index=False)
 
 if __name__ == "__main__":
     input_fullpath = sys.argv[1]
     percentile_fullpath = sys.argv[2]
     output_fullpath = sys.argv[3]
 
-    percentile = find_precentile(percentile_fullpath)
-    df = preprocess(input_fullpath)
-    df = postprocess(df)
-    print(df)
-    df.to_csv(output_fullpath, sep='|', header=False, index=False)
+    rep_doners = RepeatDoner(input_fullpath, percentile_fullpath, output_fullpath)
+    rep_doners.run()
